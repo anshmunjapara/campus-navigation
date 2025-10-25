@@ -31,6 +31,13 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # Apple Maps for iOS
+  apple_maps_flutter: ^1.4.0
+  # Location and permissions
+  geolocator: ^13.0.1
+  # Launch Apple Maps app for turn-by-turn
+  url_launcher: ^6.3.1
+
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
@@ -57,10 +64,8 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+  assets:
+    - assets/data/classrooms.json
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
