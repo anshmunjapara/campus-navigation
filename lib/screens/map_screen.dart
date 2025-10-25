@@ -58,9 +58,10 @@ class _MapScreenState extends State<MapScreen> {
                         if (!mp.isJourneyActive) {
                           mp.startJourney();
                         }
-                        Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => ArNavScreen(destination: sel)),
-                        );
+                        mp.arStart();
+                        Navigator.of(context)
+                            .push(MaterialPageRoute(builder: (_) => ArNavScreen(destination: sel)))
+                            .then((_) => mp.arStop());
                       }
                     },
                     onClose: mp.clearSelection,
@@ -91,9 +92,10 @@ class _MapScreenState extends State<MapScreen> {
                             onPressed: () {
                               final sel = mp.selected;
                               if (sel != null) {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(builder: (_) => ArNavScreen(destination: sel)),
-                                );
+                                mp.arStart();
+                                Navigator.of(context)
+                                    .push(MaterialPageRoute(builder: (_) => ArNavScreen(destination: sel)))
+                                    .then((_) => mp.arStop());
                               }
                             },
                             child: const Text('AR'),

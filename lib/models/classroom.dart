@@ -12,8 +12,15 @@ class Coord {
   }
 
   factory Coord.fromJson(Map<String, dynamic> json) {
-    final rawLat = json.containsKey('lat') ? json['lat'] : (json['latitude'] ?? json['y']);
-    final rawLng = json.containsKey('lng') ? json['lng'] : (json['longitude'] ?? json['lon'] ?? json['long'] ?? json['x']);
+    dynamic rawLat = json.containsKey('lat') ? json['lat'] : (json['latitude'] ?? json['y']);
+    dynamic rawLng = json.containsKey('lng') ? json['lng'] : (json['longitude'] ?? json['lon'] ?? json['long'] ?? json['x']);
+    // Handle accidentally nested coordinate objects (e.g., {lat: {lat:.., lng:..}, lng: ..})
+    if (rawLat is Map) {
+      rawLat = rawLat['lat'] ?? rawLat['latitude'] ?? rawLat['y'];
+    }
+    if (rawLng is Map) {
+      rawLng = rawLng['lng'] ?? rawLng['longitude'] ?? rawLng['lon'] ?? rawLng['long'] ?? rawLng['x'];
+    }
     if (rawLat == null || rawLng == null) {
       throw FormatException('Missing lat/lng in coordinate object: $json');
     }
@@ -43,7 +50,23 @@ class Classroom {
   });
 
   static Coord _parseCoordFromDynamic(dynamic v) {
-    if (v is Map<String, dynamic>) return Coord.fromJson(v);
+    if (v is Map<String, dynamic>) {
+      // Flatten nested forms like {'lat': {'lat':..,'lng':..}, 'lng': {...}}
+      final latVal = v['lat'] ?? v['latitude'] ?? v['y'];
+      final lngVal = v['lng'] ?? v['longitude'] ?? v['lon'] ?? v['long'] ?? v['x'];
+      if (latVal is Map || lngVal is Map) {
+        final flat = <String, dynamic>{
+          'lat': (latVal is Map)
+              ? (latVal['lat'] ?? latVal['latitude'] ?? latVal['y'])
+              : latVal,
+          'lng': (lngVal is Map)
+              ? (lngVal['lng'] ?? lngVal['longitude'] ?? lngVal['lon'] ?? lngVal['long'] ?? lngVal['x'])
+              : lngVal,
+        };
+        return Coord.fromJson(flat);
+      }
+      return Coord.fromJson(v);
+    }
     if (v is List && v.length >= 2) {
       final a = Coord._toDouble(v[0], field: 'lat');
       final b = Coord._toDouble(v[1], field: 'lng');
@@ -72,7 +95,7 @@ class Classroom {
     // coordinate may be nested or top-level
     Coord coord;
     if (json['coordinate'] != null) {
-      coord = Coord.fromJson((json['coordinate'] as Map).cast<String, dynamic>());
+      coord = _parseCoordFromDynamic(json['coordinate']);
     } else {
       final lat = json['lat'] ?? json['latitude'];
       final lng = json['lng'] ?? json['longitude'] ?? json['lon'] ?? json['long'];

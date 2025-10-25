@@ -3,6 +3,8 @@ import 'package:apple_maps_flutter/apple_maps_flutter.dart' as amf;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:geolocator/geolocator.dart';
+import 'package:flutter_compass/flutter_compass.dart';
+import 'dart:math' as math;
 
 import '../models/classroom.dart';
 import '../classrooms_data.dart';
@@ -18,8 +20,13 @@ class MapProvider extends ChangeNotifier {
 
   amf.AppleMapController? _controller;
   StreamSubscription<Position>? _positionSub;
+  StreamSubscription<CompassEvent>? _compassSub;
   bool _isJourneyActive = false;
   bool get isJourneyActive => _isJourneyActive;
+
+  // Whether AR view is active (suppress map polylines while true)
+  bool _arActive = false;
+  bool get isArActive => _arActive;
 
   amf.CameraPosition cameraPosition = const amf.CameraPosition(target: uRegina, zoom: 16);
 
@@ -28,6 +35,11 @@ class MapProvider extends ChangeNotifier {
 
   // Original route points (if provided by classroom)
   List<amf.LatLng> _routePoints = [];
+
+  // Smoothed user position for stable camera and trimming
+  amf.LatLng? _smoothedUser;
+  DateTime _lastCameraUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+  double? _headingDeg;
 
   Future<void> init() async {
     await _ensureLocationPermission();
@@ -73,14 +85,8 @@ class MapProvider extends ChangeNotifier {
   }
 
   void _buildAnnotations() {
-    annotations
-      ..clear()
-      ..addAll(all.map((c) => amf.Annotation(
-            annotationId: amf.AnnotationId(c.id),
-            position: amf.LatLng(c.coordinate.lat, c.coordinate.lng),
-            infoWindow: amf.InfoWindow(title: c.name, snippet: c.id),
-            onTap: () => focusOn(c),
-          )));
+    // Start with no class markers; show destination marker only after selection
+    annotations.clear();
     notifyListeners();
   }
 
@@ -137,11 +143,22 @@ class MapProvider extends ChangeNotifier {
     _positionSub?.cancel();
     _positionSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.best,
-        distanceFilter: 2,
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 0,
       ),
     ).listen((pos) {
-      final userPos = amf.LatLng(pos.latitude, pos.longitude);
+      final newPos = amf.LatLng(pos.latitude, pos.longitude);
+      // Low-pass smoothing
+      const alpha = 0.3;
+      if (_smoothedUser == null) {
+        _smoothedUser = newPos;
+      } else {
+        _smoothedUser = amf.LatLng(
+          _smoothedUser!.latitude + alpha * (newPos.latitude - _smoothedUser!.latitude),
+          _smoothedUser!.longitude + alpha * (newPos.longitude - _smoothedUser!.longitude),
+        );
+      }
+      final userPos = _smoothedUser!;
 
       // Update/replace user marker
       annotations.removeWhere((a) => a.annotationId.value == 'user');
@@ -154,8 +171,20 @@ class MapProvider extends ChangeNotifier {
         ),
       );
 
+      // Update heading wedge polyline if heading available
+      polylines.removeWhere((p) => p.polylineId.value == 'user_heading');
+      if (_headingDeg != null && !_arActive) {
+        final wedge = _buildHeadingWedge(userPos, _headingDeg!);
+        polylines.add(amf.Polyline(
+          polylineId: amf.PolylineId('user_heading'),
+          points: wedge,
+          color: const Color(0x660A84FF),
+          width: 8,
+        ));
+      }
+
       // Update remaining route by trimming the already-walked segment
-      if (_routePoints.isNotEmpty) {
+      if (!_arActive && _routePoints.isNotEmpty) {
         final remaining = _remainingRouteFrom(userPos);
         polylines
           ..removeWhere((p) => p.polylineId.value.startsWith('route_'))
@@ -167,8 +196,13 @@ class MapProvider extends ChangeNotifier {
           ));
       }
 
-      // Follow user
-      _controller?.animateCamera(amf.CameraUpdate.newLatLng(userPos));
+      // Throttled camera follow
+      final now = DateTime.now();
+      final since = now.difference(_lastCameraUpdate).inMilliseconds;
+      if (since > 300) {
+        _controller?.animateCamera(amf.CameraUpdate.newLatLng(userPos));
+        _lastCameraUpdate = now;
+      }
 
       notifyListeners();
 
@@ -186,16 +220,38 @@ class MapProvider extends ChangeNotifier {
       debugPrint('Position stream error: $e');
       stopJourney();
     });
+
+    // Compass for heading wedge
+    _compassSub?.cancel();
+    _compassSub = FlutterCompass.events?.listen((event) {
+      if (event.heading != null) {
+        final h = event.heading!;
+        _headingDeg = _smoothHeading(_headingDeg, h, 0.2);
+      }
+    });
   }
 
   void stopJourney() {
     _positionSub?.cancel();
     _positionSub = null;
+    _compassSub?.cancel();
+    _compassSub = null;
     _isJourneyActive = false;
-    // Clear user trail but keep destination marker; also clear remaining route
-    if (_routePoints.isNotEmpty) {
-      polylines.removeWhere((p) => p.polylineId.value.startsWith('route_'));
-    }
+    _smoothedUser = null;
+    // Clear user trail but keep destination marker; also clear remaining route and heading wedge
+    polylines.removeWhere((p) => p.polylineId.value.startsWith('route_') || p.polylineId.value == 'user_heading');
+    notifyListeners();
+  }
+
+  // AR lifecycle hooks: hide map route while AR is open
+  void arStart() {
+    _arActive = true;
+    polylines.clear();
+    notifyListeners();
+  }
+
+  void arStop() {
+    _arActive = false;
     notifyListeners();
   }
 
@@ -218,6 +274,39 @@ class MapProvider extends ChangeNotifier {
 
   double _haversineMeters(amf.LatLng a, amf.LatLng b) {
     return Geolocator.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude);
+  }
+
+  // Build a wedge polyline around the user pointing to heading
+  List<amf.LatLng> _buildHeadingWedge(amf.LatLng user, double headingDeg) {
+    const double dist = 20; // meters
+    const double halfAngle = 35; // degrees
+    final left = _offset(user, dist, headingDeg - halfAngle);
+    final front = _offset(user, dist * 1.2, headingDeg);
+    final right = _offset(user, dist, headingDeg + halfAngle);
+    return [user, left, front, right, user];
+  }
+
+  double _wrapAngle(double a) {
+    var x = a % 360.0;
+    if (x < -180) x += 360;
+    if (x > 180) x -= 360;
+    return x;
+  }
+
+  double _smoothHeading(double? prev, double current, double alpha) {
+    if (prev == null) return current;
+    final diff = _wrapAngle(current - prev);
+    return prev + alpha * diff;
+  }
+
+  amf.LatLng _offset(amf.LatLng origin, double distanceMeters, double bearingDeg) {
+    const double R = 6378137; // earth radius meters
+    final brng = bearingDeg * (3.141592653589793 / 180.0);
+    final lat1 = origin.latitude * (3.141592653589793 / 180.0);
+    final lon1 = origin.longitude * (3.141592653589793 / 180.0);
+    final lat2 = math.asin(math.sin(lat1) + math.cos(lat1) * math.cos(brng) * (distanceMeters / R));
+    final lon2 = lon1 + math.atan2(math.sin(brng) * (distanceMeters / R) * math.cos(lat1), math.cos(distanceMeters / R) - math.sin(lat1) * math.sin(lat2));
+    return amf.LatLng(lat2 * 180.0 / 3.141592653589793, lon2 * 180.0 / 3.141592653589793);
   }
 
   void clearSelection() {
