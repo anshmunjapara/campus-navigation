@@ -35,6 +35,10 @@ dependencies:
   apple_maps_flutter: ^1.4.0
   # Location and permissions
   geolocator: ^13.0.1
+  # Device heading (compass)
+  flutter_compass: ^0.8.0
+  # Camera preview for AR overlay
+  camera: ^0.10.5+9
   # Launch Apple Maps app for turn-by-turn
   url_launcher: ^6.3.1
 

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../models/classroom.dart';
 import '../providers/map_provider.dart';
+import 'ar_nav_screen.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -51,8 +52,55 @@ class _MapScreenState extends State<MapScreen> {
                   child: _SelectionPanel(
                     name: mp.selected!.name,
                     subtitle: mp.selected!.id,
-                    onGo: mp.startJourney,
+                    onGo: () {
+                      final sel = mp.selected;
+                      if (sel != null) {
+                        if (!mp.isJourneyActive) {
+                          mp.startJourney();
+                        }
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => ArNavScreen(destination: sel)),
+                        );
+                      }
+                    },
                     onClose: mp.clearSelection,
+                  ),
+                ),
+
+              // Map/AR toggle when journey is active
+              if (mp.isJourneyActive)
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: Container(
+                      margin: const EdgeInsets.only(top: 12),
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          FilledButton.tonal(
+                            onPressed: null, // already on Map view
+                            child: const Text('Map'),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton(
+                            onPressed: () {
+                              final sel = mp.selected;
+                              if (sel != null) {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(builder: (_) => ArNavScreen(destination: sel)),
+                                );
+                              }
+                            },
+                            child: const Text('AR'),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
 
